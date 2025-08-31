@@ -1,0 +1,27 @@
+name: OIDC Debug (margo-ml)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  whoami:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Preflight is the OIDC role secret present?
+        run: |
+          if [ -z "${{ secrets.AWS_OIDC_ROLE_ARN }}" ]; then
+            echo "❌ Missing repo secret: AWS_OIDC_ROLE_ARN"; exit 1
+          else
+            echo "✅ AWS_OIDC_ROLE_ARN is set (value is masked in logs)"
+          fi
+      - name: Configure AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+          aws-region: us-east-1
+      - name: Who am I
+        run: aws sts get-caller-identity

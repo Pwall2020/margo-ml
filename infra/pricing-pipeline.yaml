@@ -1,0 +1,119 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Margo pricing ingest (S3 -> Lambda -> RDS upsert)
+
+Parameters:
+  ArtifactsBucket:
+    Type: String
+    Description: S3 bucket that holds the zipped lambda artifact (pricing_ingest_lambda.zip)
+  DbSecretArnParam:            # ← rename to avoid any confusion
+    Type: String
+    Description: Full ARN for the RDS secret (username/password/host)
+    AllowedPattern: '^arn:aws:secretsmanager:[a-z0-9-]+:\d{12}:secret:[A-Za-z0-9/_+=,.@-]+$'
+  VpcId: # <-- NEW
+    Type: String
+    Description: VPC id hosting RDS/ECS
+    PrivateSubnetIds: # <-- NEW
+      Type: CommaDelimitedList
+      Description: Comma-separated private subnet ids for Lambda ENIs
+    DbSecurityGroupId: # <-- NEW
+      Type: String
+      Description: Security group id attached to the RDS instance/cluster
+
+Resources:
+  PricingIngestRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: s3-read
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - !Sub "arn:aws:s3:::margo-pricing-${AWS::AccountId}-us-east-1/*"
+        - PolicyName: secrets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref DbSecretArnParam
+        - PolicyName: cw-logs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [ logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents ]
+                Resource: "*"
+
+  PricingLambdaSG: # <-- NEW
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow Lambda to reach RDS:5432
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  PricingIngestLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.11
+      Handler: pricing_ingest_lambda.handler
+      Role: !GetAtt PricingIngestRole.Arn
+      Timeout: 30
+      MemorySize: 512
+      Code:
+        S3Bucket: !Ref ArtifactsBucket
+        S3Key: pricing_ingest_lambda.zip
+      Environment:
+        Variables:
+          DB_SECRET_ARN: !Ref DbSecretArnParam   # ← env var uses param
+    VpcConfig: # <-- NEW
+      SecurityGroupIds: [ !Ref PricingLambdaSG ]
+      SubnetIds: !Ref PrivateSubnetIds
+
+  # Allow S3 bucket to invoke the Lambda (use literal name to avoid cycles)
+  S3InvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref PricingIngestLambda
+      Principal: s3.amazonaws.com
+      SourceArn: !Sub "arn:aws:s3:::margo-pricing-${AWS::AccountId}-us-east-1"
+
+  PricingBucket:
+    Type: AWS::S3::Bucket
+    DependsOn:
+      - S3InvokePermission
+    Properties:
+      BucketName: !Sub margo-pricing-${AWS::AccountId}-us-east-1
+      VersioningConfiguration: { Status: Enabled }
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: s3:ObjectCreated:*
+            Function: !GetAtt PricingIngestLambda.Arn
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: suffix
+                    Value: .csv
+
+Outputs:
+  PricingBucketName:
+    Value: !Ref PricingBucket
+    Export:
+      Name: margo:PricingBucketName

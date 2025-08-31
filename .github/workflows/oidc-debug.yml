@@ -11,12 +11,16 @@ jobs:
   whoami:
     runs-on: ubuntu-latest
     steps:
+      - name: Show GitHub context
+        run: |
+          echo "GITHUB_REPOSITORY=${GITHUB_REPOSITORY}"
+          echo "GITHUB_REF=${GITHUB_REF}"
       - name: Preflight is the OIDC role secret present?
         run: |
           if [ -z "${{ secrets.AWS_OIDC_ROLE_ARN }}" ]; then
             echo "❌ Missing repo secret: AWS_OIDC_ROLE_ARN"; exit 1
           else
-            echo "✅ AWS_OIDC_ROLE_ARN is set (value is masked in logs)"
+            echo "✅ AWS_OIDC_ROLE_ARN is set (value is masked)"
           fi
       - name: Configure AWS (OIDC)
         uses: aws-actions/configure-aws-credentials@v4

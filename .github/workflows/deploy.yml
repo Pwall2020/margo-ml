@@ -47,6 +47,25 @@ jobs:
           container-name: ${{ env.CONTAINER_NAME }}
           image: ${{ env.IMAGE_URI }}
 
+      - name:
+          Preflight: verify ECS cluster & service exist
+        run: |
+          set -e
+          if [ -z "${{ secrets.ECS_CLUSTER_NAME }}" ] || [ -z "${{ secrets.ECS_ML_SERVICE_NAME }}" ]; then
+            echo "❌ ECS_CLUSTER_NAME or ECS_ML_SERVICE_NAME secret is missing."
+            exit 1
+          fi
+          echo "Cluster: ${{ secrets.ECS_CLUSTER_NAME }}"
+          echo "Service : ${{ secrets.ECS_ML_SERVICE_NAME }}"
+          # List clusters & services (use names, not ARNs)
+          aws ecs list-clusters --region $AWS_REGION
+          aws ecs describe-services \
+            --region $AWS_REGION \
+            --cluster "${{ secrets.ECS_CLUSTER_NAME }}" \
+            --services "${{ secrets.ECS_ML_SERVICE_NAME }}" \
+            --query '{services: services[].{name:serviceName,status:status}, failures: failures}' \
+            --output table
+
       - name: Deploy to ECS Service
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
